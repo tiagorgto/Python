@@ -1,0 +1,91 @@
+import re
+
+import pandas as pd
+
+import PyPDF2
+
+arquivo = '4117142_2'
+
+
+file_columns = ['chave_de_acesso_nfe','numero','serie','tipo','data_emissao','razao_social_emitente','razao_social_destinatario','item','produto','codigo_produto','cfop','qtd_comercial','unidade_comercial','valor_produto','valor_bc_icms','valor_icms','valor_bc_icms_estrela','aliquota','icms_devido']
+
+def format_record(record: str):
+    group_match_expression = r"(\d{44})\s(\d{1,})\s(\d{1,})\s(\d{1,})\s(\d{1,2}/\d{1,2}/\d{1,4})\s(.*?LTDA)\s(.*?)\s(\d{1,2})\s?(\w+.*)\s([A-Z]{3}\d{4}\d{6}|[A-Z]{3}.\d{4}.\d{6})\s(\d{4})\s(\d{1,}[,|.]\d{0,})\s(\w+.*?)\s(\d{1,}?.?\d{0,}[.|,]\d{0,})\s?()\s?()\s?(\d{1,}?.?\d{0,}[,|.]\d{0,})\s?\s(\d{1,}[,|.]\d{0,}%)\s(\d{1,}?.?\d{0,}[,|.]\d{0,})"    
+    return re.match(group_match_expression, record).groups()
+
+
+# file_columns = ['chave_de_acesso_nfe', 'numero', 'data_emissao', 'razao_social_destinatario', 'item', 'produto', 'codigo_produto', 'cfop', 'qtd_comercial', 'unidade_comercial', 'valor_produto', 'valor_bc_icms', 'valor_icms', 'valor_bc_icms_estrela', 'aliquota', 'icms_devido']
+
+
+# def format_record(record: str):
+#     group_match_expression = r"(\d{44})\s(\d{1,})\s(\d{1,2}/\d{1,2}/\d{1,4})\s(.*?)\s(\d{1,2})\s?(\w+.*)\s([A-Z]{3}\d{4}\d{6}|[A-Z]{3}.\d{4}.\d{6})\s(\d{4})\s(\d{1,}[,|.]\d{0,})\s(\w+.*?)\s(\d{1,}?.?\d{0,}[.|,]\d{0,})\s?()\s?()\s?(\d{1,}?.?\d{0,}[,|.]\d{0,})\s?\s(\d{1,}[,|.]\d{0,}%)\s(\d{1,}?.?\d{0,}[,|.]\d{0,})"
+#     return re.match(group_match_expression, record).groups()
+
+def get_page_content(page: PyPDF2.PageObject, page_number):
+        
+    # page.compress_content_streams()
+    page_content = page.extract_text()
+    record_set = page_content.split("\n")
+
+    #print(record_set)
+    
+    end_index_map = {
+        3345: 'R$ 367.675,95 Valor BC ICMS* = Valor da Base de Cálculo do ICMS já considerada a redução prevista no Artigo 39° do Anexo II do RICMS/00 Total:',
+        3346: 'COORDENADORIA DA ADMINISTRAÇÃO TRIBUTÁRIA'    
+    }
+
+    if page_number == 3345:
+        content_start_index = record_set.index('a bc d e f g h i j k l m n o p q r sDados da NFE Determinado pelo Fisco') + 1  
+    elif page_number in (836, 2059, 3346):
+        content_start_index = record_set.index('a b e g h i j k l m n o p q r s') + 1
+    else:
+        content_start_index = record_set.index('a b e g h i j k l m n o p q r sDados da NFE Determinado pelo Fisco') + 1
+        
+    # Recupera o content_end_index a partir do dicionário ou usa um valor padrão
+    content_end_index = record_set.index(end_index_map.get(page_number, 'AFR: Saulo Rodrigues do Nascimento'))
+
+    record_set = record_set[content_start_index:content_end_index]
+
+    record_set[-1] = record_set[1].replace("Dados da NFE Determinado pelo Fisco", "")
+    #record_set[-1] = record_set[1].replace("SECRETARIA DA FAZENDA", "")
+    
+    
+    return record_set
+
+def parse_file(page, destination_file_name):
+    page_content = None
+    error_pagina = page[0]+1
+    
+    try:
+        print(f"Parsing {destination_file_name}")
+        page_content = get_page_content(page=page[1], page_number=page[0])
+        
+        if not page_content:
+            raise ValueError("No content parsed from page")
+
+        records = list(filter(lambda record: record and record != '', page_content))
+        
+        formated_records = list(map(format_record, records))
+
+        content_df = pd.DataFrame(formated_records, columns=file_columns)
+        
+        content_df.to_csv(destination_file_name, sep=";", index=False)
+        
+    except Exception as e:
+        with open(f'./output/error/{arquivo}/{arquivo}-page-{error_pagina}.error.csv', 'a+') as file:
+            file.write(f"Error processing page {error_pagina}\n")
+            if page_content:
+                file.write(str(page_content))
+            file.write(str(e))
+            file.close()
+
+
+
+with open(f'{arquivo}.pdf', 'rb') as pdf_file:
+
+    pdf_reader = PyPDF2.PdfReader(pdf_file)
+    file_pages = list(range(3345, 3346))
+    #file_pages = list(range(3345, 3350))
+    
+    for index in file_pages:
+        parse_file((index, pdf_reader.pages[index]),  f"./output/ready/{arquivo}/{arquivo}-page-{index+1}.csv")
